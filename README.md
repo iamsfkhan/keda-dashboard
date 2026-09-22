@@ -40,6 +40,11 @@ In normal mode the backend first attempts in-cluster service-account authenticat
 
 ## Deploy to Amazon EKS with Helm
 
+Published artifacts:
+
+- Container image: `docker.io/iamsfkhan/keda-dashboard:0.2.0`
+- Helm chart: `oci://registry-1.docker.io/iamsfkhan/keda-dashboard-chart` version `0.2.0`
+
 ### Prerequisites
 
 - An EKS cluster with [KEDA installed](https://keda.sh/docs/latest/deploy/)
@@ -56,27 +61,32 @@ kubectl config current-context
 kubectl get crd scaledobjects.keda.sh scaledjobs.keda.sh
 ```
 
-### Image and namespace
+### Install the published chart
 
-Create a dedicated namespace and install the public image:
+Install the public OCI chart and container image without cloning this repository:
 
 ```bash
-kubectl create namespace keda-dashboard
-helm upgrade --install keda-dashboard ./charts/keda-dashboard \
+helm upgrade --install keda-dashboard \
+  oci://registry-1.docker.io/iamsfkhan/keda-dashboard-chart \
+  --version 0.2.0 \
   --namespace keda-dashboard \
+  --create-namespace \
   --set image.repository=iamsfkhan/keda-dashboard \
   --set image.tag=0.2.0
 ```
 
-`--create-namespace` may replace the explicit namespace command. The chart creates a dedicated ServiceAccount by default and binds it to a cluster-wide, read-only ClusterRole so resources in all namespaces are visible. It grants only `get`, `list`, and `watch` for ScaledObjects, ScaledJobs, HPAs, selected workload metadata, and Events. It does **not** grant access to Secrets.
+The chart creates a dedicated ServiceAccount by default and binds it to a cluster-wide, read-only ClusterRole so resources in all namespaces are visible. It grants only `get`, `list`, and `watch` for ScaledObjects, ScaledJobs, HPAs, selected workload metadata, and Events. It does **not** grant access to Secrets.
 
 For production environments that require ECR, mirror the same tag into ECR and override `image.repository`. For private registries, configure `imagePullSecrets`.
 
 If service-account management is handled elsewhere:
 
 ```bash
-helm upgrade --install keda-dashboard ./charts/keda-dashboard \
+helm upgrade --install keda-dashboard \
+  oci://registry-1.docker.io/iamsfkhan/keda-dashboard-chart \
+  --version 0.2.0 \
   --namespace keda-dashboard \
+  --create-namespace \
   --set serviceAccount.create=false \
   --set serviceAccount.name=keda-dashboard \
   --set image.repository=iamsfkhan/keda-dashboard \
@@ -124,8 +134,11 @@ ingress:
 Install or apply the update:
 
 ```bash
-helm upgrade --install keda-dashboard ./charts/keda-dashboard \
+helm upgrade --install keda-dashboard \
+  oci://registry-1.docker.io/iamsfkhan/keda-dashboard-chart \
+  --version 0.2.0 \
   --namespace keda-dashboard \
+  --create-namespace \
   -f values-eks.yaml
 kubectl -n keda-dashboard get ingress keda-dashboard-keda-dashboard
 ```
@@ -176,7 +189,9 @@ The first authorization check should return `yes`; the Secret check must return 
 ### Upgrade and uninstall
 
 ```bash
-helm upgrade keda-dashboard ./charts/keda-dashboard \
+helm upgrade keda-dashboard \
+  oci://registry-1.docker.io/iamsfkhan/keda-dashboard-chart \
+  --version 0.2.0 \
   --namespace keda-dashboard \
   --reuse-values \
   --set image.tag=0.2.0
@@ -212,6 +227,17 @@ make helm-lint
 make validate-rbac
 make build
 make docker
+```
+
+To package and publish a release, keep the image and chart in separate OCI repositories:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --tag iamsfkhan/keda-dashboard:0.2.0 \
+  --push .
+helm package charts/keda-dashboard
+helm push keda-dashboard-chart-0.2.0.tgz \
+  oci://registry-1.docker.io/iamsfkhan
 ```
 
 The OpenAPI specification is in [`api/openapi.yaml`](api/openapi.yaml). Main packages:
