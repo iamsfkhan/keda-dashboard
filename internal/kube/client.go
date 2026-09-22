@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,8 +122,13 @@ func (c *Client) List(ctx context.Context, kind, namespace, query, status string
 	}
 	nsSet := map[string]struct{}{}
 	query = strings.ToLower(strings.TrimSpace(query))
+	hpasByName, hpasByOwner := c.indexHPAs(ctx, namespace)
 	for i := range list.Items {
-		item := summarize(&list.Items[i], canonical)
+		obj := &list.Items[i]
+		item := summarize(obj, canonical)
+		if view, ok := matchHPA(obj, hpasByName, hpasByOwner); ok {
+			applyHPAView(&item, view)
+		}
 		nsSet[item.Namespace] = struct{}{}
 		if query != "" && !strings.Contains(strings.ToLower(item.Name+" "+item.Namespace+" "+strings.Join(triggerTypes(item.Triggers), " ")), query) {
 			continue
@@ -157,7 +163,7 @@ func (c *Client) Get(ctx context.Context, kind, namespace, name string) (model.R
 	}
 	out := summarize(obj, canonical)
 	out.Events = c.relatedEvents(ctx, obj)
-	out.HPA = c.relatedHPA(ctx, obj)
+	c.attachHPA(ctx, obj, &out)
 	c.enrichTarget(ctx, &out)
 	safe := sanitize(obj.Object)
 	yamlBytes, err := yaml.Marshal(safe)
@@ -233,13 +239,25 @@ func summarize(obj *unstructured.Unstructured, kind string) model.Resource {
 	}
 	annotations := obj.GetAnnotations()
 	out.Paused = annotations["autoscaling.keda.sh/paused"] == "true" || annotations["autoscaling.keda.sh/paused-replicas"] != ""
-	out.CurrentReplicas, _, _ = unstructured.NestedInt64(obj.Object, "status", "currentReplicas")
-	if out.CurrentReplicas == 0 {
-		out.CurrentReplicas, _, _ = unstructured.NestedInt64(obj.Object, "status", "currentReplicaCount")
+	if current, found := nestedReplica(obj, "currentReplicas", "currentReplicaCount"); found {
+		out.CurrentReplicas = current
+		out.ReplicaSource = "status"
 	}
-	out.DesiredReplicas, _, _ = unstructured.NestedInt64(obj.Object, "status", "desiredReplicas")
-	if out.DesiredReplicas == 0 {
-		out.DesiredReplicas, _, _ = unstructured.NestedInt64(obj.Object, "status", "desiredReplicaCount")
+	if desired, found := nestedReplica(obj, "desiredReplicas", "desiredReplicaCount"); found {
+		out.DesiredReplicas = desired
+		out.ReplicaSource = "status"
+	}
+	if minReplicas, found, _ := unstructured.NestedInt64(obj.Object, "spec", "minReplicaCount"); found {
+		out.MinReplicas = minReplicas
+	}
+	if maxReplicas, found, _ := unstructured.NestedInt64(obj.Object, "spec", "maxReplicaCount"); found {
+		out.MaxReplicas = maxReplicas
+	}
+	if cooldown, found, _ := unstructured.NestedInt64(obj.Object, "spec", "cooldownPeriod"); found {
+		out.CooldownSeconds = cooldown
+	}
+	if lastActive, found, _ := unstructured.NestedString(obj.Object, "status", "lastActiveTime"); found {
+		out.LastActiveTime = lastActive
 	}
 	if conditions, ok, _ := unstructured.NestedSlice(obj.Object, "status", "conditions"); ok {
 		for _, raw := range conditions {
@@ -259,6 +277,7 @@ func summarize(obj *unstructured.Unstructured, kind string) model.Resource {
 	}
 	if triggers, ok, _ := unstructured.NestedSlice(obj.Object, "spec", "triggers"); ok {
 		health, _, _ := unstructured.NestedMap(obj.Object, "status", "health")
+		activity, _, _ := unstructured.NestedMap(obj.Object, "status", "triggersActivity")
 		for index, raw := range triggers {
 			m, _ := raw.(map[string]any)
 			trigger := model.Trigger{Type: stringValue(m["type"])}
@@ -276,6 +295,15 @@ func summarize(obj *unstructured.Unstructured, kind string) model.Resource {
 					trigger.AuthenticationRef = &model.RelatedResource{Kind: kind, Namespace: namespace, Name: name}
 				}
 			}
+			if meta, ok := m["metadata"].(map[string]any); ok && trigger.Type == "cron" {
+				desired, _ := strconv.ParseInt(stringValue(meta["desiredReplicas"]), 10, 64)
+				trigger.Schedule = &model.TriggerSchedule{
+					Start:           stringValue(meta["start"]),
+					End:             stringValue(meta["end"]),
+					Timezone:        stringValue(meta["timezone"]),
+					DesiredReplicas: desired,
+				}
+			}
 			prefix := fmt.Sprintf("s%d-", index)
 			for key, rawHealth := range health {
 				if !strings.HasPrefix(key, prefix) {
@@ -284,6 +312,16 @@ func summarize(obj *unstructured.Unstructured, kind string) model.Resource {
 				healthMap, _ := rawHealth.(map[string]any)
 				healthy := strings.EqualFold(stringValue(healthMap["status"]), "happy")
 				trigger.Healthy = &healthy
+				break
+			}
+			for key, rawActivity := range activity {
+				if !strings.HasPrefix(key, prefix) {
+					continue
+				}
+				activityMap, _ := rawActivity.(map[string]any)
+				if active, ok := boolValue(activityMap["isActive"]); ok {
+					trigger.Active = &active
+				}
 				break
 			}
 			out.Triggers = append(out.Triggers, trigger)
@@ -329,28 +367,87 @@ func (c *Client) enrichTarget(ctx context.Context, resource *model.Resource) {
 		replicas, _, _ = unstructured.NestedInt64(workload.Object, "status", "desiredNumberScheduled")
 	}
 	resource.Target.Ready = fmt.Sprintf("%d/%d ready", ready, replicas)
+	if resource.ReplicaSource == "" {
+		if gvr.Resource == "daemonsets" {
+			resource.CurrentReplicas = ready
+			resource.DesiredReplicas = replicas
+		} else if specReplicas, found, _ := unstructured.NestedInt64(workload.Object, "spec", "replicas"); found {
+			resource.CurrentReplicas = replicas
+			resource.DesiredReplicas = specReplicas
+		}
+		resource.ReplicaSource = "workload"
+	}
 }
 
-func (c *Client) relatedHPA(ctx context.Context, obj *unstructured.Unstructured) *model.RelatedResource {
-	list, err := c.dynamic.Resource(hpas).Namespace(obj.GetNamespace()).List(ctx, metav1.ListOptions{})
+type hpaView struct {
+	name      string
+	namespace string
+	current   int64
+	desired   int64
+}
+
+func (c *Client) attachHPA(ctx context.Context, obj *unstructured.Unstructured, resource *model.Resource) {
+	byName, byOwner := c.indexHPAs(ctx, obj.GetNamespace())
+	if view, ok := matchHPA(obj, byName, byOwner); ok {
+		applyHPAView(resource, view)
+	}
+}
+
+func (c *Client) indexHPAs(ctx context.Context, namespace string) (map[string]hpaView, map[string]hpaView) {
+	byName := map[string]hpaView{}
+	byOwner := map[string]hpaView{}
+	list, err := c.dynamic.Resource(hpas).Namespace(namespaceOrAll(namespace)).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		c.log.Warn("unable to list related HPAs", "namespace", obj.GetNamespace(), "error", err)
-		return nil
+		c.log.Warn("unable to list related HPAs", "namespace", namespace, "error", err)
+		return byName, byOwner
 	}
-	statusName, _, _ := unstructured.NestedString(obj.Object, "status", "hpaName")
 	for i := range list.Items {
-		h := &list.Items[i]
-		owned := statusName != "" && h.GetName() == statusName
-		for _, owner := range h.GetOwnerReferences() {
-			owned = owned || owner.UID == obj.GetUID()
-		}
-		if owned {
-			current, _, _ := unstructured.NestedInt64(h.Object, "status", "currentReplicas")
-			desired, _, _ := unstructured.NestedInt64(h.Object, "status", "desiredReplicas")
-			return &model.RelatedResource{Kind: "HorizontalPodAutoscaler", Namespace: h.GetNamespace(), Name: h.GetName(), Ready: fmt.Sprintf("%d/%d", current, desired)}
+		hpa := &list.Items[i]
+		current, _, _ := unstructured.NestedInt64(hpa.Object, "status", "currentReplicas")
+		desired, _, _ := unstructured.NestedInt64(hpa.Object, "status", "desiredReplicas")
+		view := hpaView{name: hpa.GetName(), namespace: hpa.GetNamespace(), current: current, desired: desired}
+		byName[hpa.GetNamespace()+"/"+hpa.GetName()] = view
+		for _, owner := range hpa.GetOwnerReferences() {
+			byOwner[string(owner.UID)] = view
 		}
 	}
-	return nil
+	return byName, byOwner
+}
+
+func matchHPA(obj *unstructured.Unstructured, byName, byOwner map[string]hpaView) (hpaView, bool) {
+	statusName, _, _ := unstructured.NestedString(obj.Object, "status", "hpaName")
+	if statusName != "" {
+		if view, ok := byName[obj.GetNamespace()+"/"+statusName]; ok {
+			return view, true
+		}
+	}
+	if view, ok := byOwner[string(obj.GetUID())]; ok {
+		return view, true
+	}
+	return hpaView{}, false
+}
+
+func applyHPAView(resource *model.Resource, view hpaView) {
+	resource.HPA = &model.RelatedResource{
+		Kind: "HorizontalPodAutoscaler", Namespace: view.namespace, Name: view.name,
+		Ready: fmt.Sprintf("%d/%d", view.current, view.desired),
+	}
+	if resource.ReplicaSource == "status" {
+		return
+	}
+	resource.CurrentReplicas = view.current
+	resource.DesiredReplicas = view.desired
+	resource.ReplicaSource = "hpa"
+}
+
+func nestedReplica(obj *unstructured.Unstructured, names ...string) (int64, bool) {
+	for _, name := range names {
+		value, found, _ := unstructured.NestedInt64(obj.Object, "status", name)
+		if found {
+			return value, true
+		}
+	}
+	return 0, false
 }
 
 func (c *Client) relatedEvents(ctx context.Context, obj *unstructured.Unstructured) []model.Event {
@@ -414,6 +511,18 @@ func stringValue(v any) string {
 		return ""
 	}
 	return fmt.Sprint(v)
+}
+
+func boolValue(v any) (bool, bool) {
+	switch typed := v.(type) {
+	case bool:
+		return typed, true
+	case string:
+		parsed, err := strconv.ParseBool(typed)
+		return parsed, err == nil
+	default:
+		return false, false
+	}
 }
 
 func triggerTypes(triggers []model.Trigger) []string {
