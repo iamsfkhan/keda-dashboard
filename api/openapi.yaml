@@ -179,6 +179,11 @@ components:
         active: { type: boolean }
         currentReplicas: { type: integer, format: int64 }
         desiredReplicas: { type: integer, format: int64 }
+        replicaSource: { type: string, enum: [status, hpa, workload] }
+        minReplicas: { type: integer, format: int64 }
+        maxReplicas: { type: integer, format: int64 }
+        cooldownSeconds: { type: integer, format: int64 }
+        lastActiveTime: { type: string, format: date-time }
         target: { $ref: "#/components/schemas/RelatedResource" }
         hpa: { $ref: "#/components/schemas/RelatedResource" }
         triggers:
@@ -188,6 +193,14 @@ components:
             properties:
               type: { type: string }
               healthy: { type: boolean }
+              active: { type: boolean }
+              schedule:
+                type: object
+                properties:
+                  start: { type: string }
+                  end: { type: string }
+                  timezone: { type: string }
+                  desiredReplicas: { type: integer, format: int64 }
               authenticationRef:
                 $ref: "#/components/schemas/RelatedResource"
         conditions:

@@ -50,6 +50,45 @@ func TestSummarizeScaledObject(t *testing.T) {
 	}
 }
 
+func TestApplyHPAReplicasWhenStatusOmitsCounts(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "checkout-api", "namespace": "checkout", "uid": "abc"},
+		"spec": map[string]any{
+			"minReplicaCount": int64(0),
+			"maxReplicaCount": int64(2),
+			"cooldownPeriod":  int64(1800),
+			"triggers": []any{map[string]any{
+				"type": "cron",
+				"metadata": map[string]any{
+					"start": "00 09 * * *", "end": "00 18 * * *", "timezone": "UTC", "desiredReplicas": "1",
+				},
+			}},
+		},
+		"status": map[string]any{
+			"hpaName":        "keda-hpa-api",
+			"lastActiveTime": "2026-09-22T17:29:49Z",
+			"conditions":     []any{map[string]any{"type": "Active", "status": "False"}},
+			"triggersActivity": map[string]any{
+				"s0-cron-UTC": map[string]any{"isActive": false},
+			},
+		},
+	}}
+	got := summarize(obj, "ScaledObject")
+	if got.CurrentReplicas != 0 || got.ReplicaSource != "" || got.CooldownSeconds != 1800 {
+		t.Fatalf("unexpected summary: %#v", got)
+	}
+	if got.Triggers[0].Schedule == nil || got.Triggers[0].Schedule.DesiredReplicas != 1 || got.Triggers[0].Schedule.Timezone != "UTC" {
+		t.Fatalf("unexpected schedule: %#v", got.Triggers[0].Schedule)
+	}
+	if got.Triggers[0].Active == nil || *got.Triggers[0].Active {
+		t.Fatalf("unexpected trigger activity: %#v", got.Triggers[0].Active)
+	}
+	applyHPAView(&got, hpaView{name: "keda-hpa-checkout-api", namespace: "checkout", current: 1, desired: 1})
+	if got.CurrentReplicas != 1 || got.DesiredReplicas != 1 || got.ReplicaSource != "hpa" || got.HPA == nil || got.HPA.Ready != "1/1" {
+		t.Fatalf("hpa replicas were not applied: %#v", got)
+	}
+}
+
 func TestSanitizeRedactsNestedCredentialFields(t *testing.T) {
 	value := map[string]any{
 		"metadata": map[string]any{"name": "safe"},

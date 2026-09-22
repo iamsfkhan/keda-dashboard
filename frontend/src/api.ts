@@ -12,9 +12,17 @@ export type RelatedResource = {
   name: string;
   ready?: string;
 };
+export type TriggerSchedule = {
+  start?: string;
+  end?: string;
+  timezone?: string;
+  desiredReplicas?: number;
+};
 export type Trigger = {
   type: string;
   healthy?: boolean;
+  active?: boolean;
+  schedule?: TriggerSchedule;
   authenticationRef?: RelatedResource;
 };
 export type KedaEvent = {
@@ -36,6 +44,11 @@ export type Resource = {
   active: boolean;
   currentReplicas: number;
   desiredReplicas: number;
+  replicaSource?: string;
+  minReplicas?: number;
+  maxReplicas?: number;
+  cooldownSeconds?: number;
+  lastActiveTime?: string;
   target?: RelatedResource;
   hpa?: RelatedResource;
   triggers: Trigger[];

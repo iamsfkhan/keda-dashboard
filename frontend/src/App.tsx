@@ -8,6 +8,7 @@ import {
   type Resource,
   type ResourceList,
 } from "./api";
+import ScalingFlow from "./ScalingFlow";
 
 const EMPTY_OVERVIEW: Overview = {
   scaledObjects: 0,
@@ -273,11 +274,7 @@ function DetailOverview({ resource: r, metrics, prometheus }: { resource: Resour
   return (
     <div className="detail-grid">
       <div className="stack">
-        <section className="panel">
-          <div className="panel-title"><h2>Scaling status</h2><span>{r.active ? "Active" : "Idle"}</span></div>
-          <div className="replica-big"><strong>{r.currentReplicas}</strong><span>current replicas</span><i>→</i><strong>{r.desiredReplicas}</strong><span>desired replicas</span></div>
-          {(r.target || r.hpa) && <div className="related">{[r.target, r.hpa].filter(Boolean).map((item) => <div key={item!.kind}><small>{item!.kind}</small><b>{item!.name}</b><span>{item!.ready}</span></div>)}</div>}
-        </section>
+        <ScalingFlow resource={r} />
         {prometheus && <section className="panel"><div className="panel-title"><h2>Metric history</h2><span>Last hour</span></div>{metrics.length ? <div className="chart">{metrics.map((point) => <i title={`${point.value}`} key={point.timestamp} style={{ height: `${Math.max(4, point.value / max * 100)}%` }} />)}</div> : <Empty compact text="No metric samples returned" />}</section>}
         <section className="panel"><div className="panel-title"><h2>Conditions</h2></div><div className="conditions">{r.conditions.length ? r.conditions.map((c) => <div key={c.type}><StatusPill ok={c.status === "True"}>{c.status}</StatusPill><span><b>{c.type}</b><small>{c.message || c.reason || "No details reported"}</small></span></div>) : <Empty compact text="No conditions reported" />}</div></section>
       </div>

@@ -10,9 +10,18 @@ type Condition struct {
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
 
+type TriggerSchedule struct {
+	Start           string `json:"start,omitempty"`
+	End             string `json:"end,omitempty"`
+	Timezone        string `json:"timezone,omitempty"`
+	DesiredReplicas int64  `json:"desiredReplicas,omitempty"`
+}
+
 type Trigger struct {
 	Type              string           `json:"type"`
 	Healthy           *bool            `json:"healthy,omitempty"`
+	Active            *bool            `json:"active,omitempty"`
+	Schedule          *TriggerSchedule `json:"schedule,omitempty"`
 	AuthenticationRef *RelatedResource `json:"authenticationRef,omitempty"`
 }
 
@@ -43,6 +52,11 @@ type Resource struct {
 	Active          bool              `json:"active"`
 	CurrentReplicas int64             `json:"currentReplicas"`
 	DesiredReplicas int64             `json:"desiredReplicas"`
+	ReplicaSource   string            `json:"replicaSource,omitempty"`
+	MinReplicas     int64             `json:"minReplicas,omitempty"`
+	MaxReplicas     int64             `json:"maxReplicas,omitempty"`
+	CooldownSeconds int64             `json:"cooldownSeconds,omitempty"`
+	LastActiveTime  string            `json:"lastActiveTime,omitempty"`
 	Target          *RelatedResource  `json:"target,omitempty"`
 	HPA             *RelatedResource  `json:"hpa,omitempty"`
 	Triggers        []Trigger         `json:"triggers"`
