@@ -1,5 +1,5 @@
 apiVersion: v2
-name: keda-dashboard
+name: keda-dashboard-chart
 description: A read-only operational dashboard for KEDA
 type: application
 version: 0.2.0
