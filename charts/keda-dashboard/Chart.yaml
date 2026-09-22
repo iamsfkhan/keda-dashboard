@@ -1,0 +1,12 @@
+apiVersion: v2
+name: keda-dashboard
+description: A read-only operational dashboard for KEDA
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+home: https://github.com/iamsfkhan/keda-dashboard
+sources:
+  - https://github.com/iamsfkhan/keda-dashboard
+keywords: [keda, kubernetes, autoscaling, dashboard]
+maintainers:
+  - name: Safwan Khan
