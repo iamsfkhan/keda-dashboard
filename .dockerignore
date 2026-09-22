@@ -1,0 +1,6 @@
+.git
+.github
+bin
+frontend/node_modules
+**/*.log
+.DS_Store

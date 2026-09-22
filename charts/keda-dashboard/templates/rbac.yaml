@@ -1,0 +1,34 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "keda-dashboard.fullname" . }}
+  labels:
+    {{- include "keda-dashboard.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects", "scaledjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "keda-dashboard.fullname" . }}
+  labels:
+    {{- include "keda-dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "keda-dashboard.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "keda-dashboard.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
